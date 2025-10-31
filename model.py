@@ -46,7 +46,8 @@ class MultiHeadAttention(nn.Module):
         Q = Q.view(b, t, self.n_heads, self.d_k).transpose(-2, -3)  # (b, n_heads, t, d_k)
         K = K.view(b, t, self.n_heads, self.d_k).transpose(-2, -3)  # (b, n_heads, t, d_k)
         V = V.view(b, t, self.n_heads, self.d_v).transpose(-2, -3)  # (b, n_heads, t, d_v)
-        masked_attention = (Q @ K.transpose(-2, -1)).masked_fill_(self.mask, -float('inf'))  # (b, n_heads, t, t)
+        masked_attention = (Q @ K.transpose(-2, -1)).masked_fill_(self.mask[:t, :t], -float('inf'))  # (b, n_heads, t, t)
+        # the reason to do mask[:t, :t] instead of just self.mask is in the case that the input sequence is shorter than the sequence length; we don't want to mask asymmetrically
         intermediate = F.softmax(masked_attention / self.d_k**0.5, dim=-1)
         scores = intermediate @ V  # (b, n_heads, t, d_v)
         return self.w_o(scores.transpose(1, 2).contiguous().view(b, t, self.n_heads*self.d_v))  # (b, t, n_heads*d_v) @ (n_heads*d_v, d_model) = (b, t, d_model)
@@ -96,7 +97,7 @@ class TransformerModel(nn.Module):
         super().__init__()
         self.wte = nn.Embedding(vocab_size, d_model, device=device)
         self.wpe = nn.Embedding(seq_len, d_model, device=device)
-        self.blocks = [TransformerBlock(d_model, d_k, d_v, n_heads, d_ff, seq_len) for _ in range(n_layers)]
+        self.blocks = nn.ModuleList([TransformerBlock(d_model, d_k, d_v, n_heads, d_ff, seq_len) for _ in range(n_layers)])
         self.lm_head = nn.Linear(d_model, vocab_size)
         self.apply(self._init_weights)
 
