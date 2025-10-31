@@ -20,10 +20,11 @@ class Config():
     vocab_size = 50257
     learning_rate = 3e-4
     bias = False
+    dropout = 0.1
 
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, n_heads, d_model, d_k, d_v, seq_len):
+    def __init__(self, n_heads, d_model, d_k, d_v, seq_len, dropout):
         super().__init__()
         # note that pretty much always d_k = d_v = d_model/n_heads (and so d_model should always be divisible by n_heads)
         self.n_heads = n_heads
@@ -36,6 +37,8 @@ class MultiHeadAttention(nn.Module):
         self.w_v = nn.Linear(d_model, d_v*n_heads, bias=False)
         self.w_o = nn.Linear(n_heads * d_v, d_model)
         self.register_buffer('mask', torch.triu(torch.ones(seq_len, seq_len, dtype=torch.bool), diagonal=1), persistent=False)
+        self.attention_dropout = nn.Dropout(dropout)
+        self.output_dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         # x is (b, t, d_model)
@@ -47,19 +50,23 @@ class MultiHeadAttention(nn.Module):
         masked_attention = (Q @ K.transpose(-2, -1)).masked_fill_(self.mask[:t, :t], -float('inf'))  # (b, n_heads, t, t)
         # the reason to do mask[:t, :t] instead of just self.mask is in the case that the input sequence is shorter than the sequence length; we don't want to mask asymmetrically
         intermediate = F.softmax(masked_attention / self.d_k**0.5, dim=-1)
+        intermediate = self.attention_dropout(intermediate)
         scores = intermediate @ V  # (b, n_heads, t, d_v)
-        return self.w_o(scores.transpose(1, 2).contiguous().view(b, t, self.n_heads*self.d_v))  # (b, t, n_heads*d_v) @ (n_heads*d_v, d_model) = (b, t, d_model)
+        y = self.w_o(scores.transpose(1, 2).contiguous().view(b, t, self.n_heads*self.d_v))  # (b, t, n_heads*d_v) @ (n_heads*d_v, d_model) = (b, t, d_model)
+        y = self.output_dropout(y)
+        return y
 
 
 class MLP(nn.Module):
-    def __init__(self, d_model, d_ff):
+    def __init__(self, d_model, d_ff, dropout):
         super().__init__()
         self.fc1 = nn.Linear(d_model, d_ff)
         self.gelu = nn.GELU()
         self.fc2 = nn.Linear(d_ff, d_model)
+        self.output_dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        return self.fc2(self.gelu(self.fc1(x)))
+        return self.output_dropout(self.fc2(self.gelu(self.fc1(x))))
 
 
 class LayerNorm(nn.Module):
@@ -77,12 +84,12 @@ class LayerNorm(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    def __init__(self, d_model, d_k, d_v, n_heads, d_ff, seq_len):
+    def __init__(self, d_model, d_k, d_v, n_heads, d_ff, seq_len, dropout):
         super().__init__()
         self.ln1 = LayerNorm(d_model)
-        self.mha = MultiHeadAttention(n_heads, d_model, d_k, d_v, seq_len)
+        self.mha = MultiHeadAttention(n_heads, d_model, d_k, d_v, seq_len, dropout)
         self.ln2 = LayerNorm(d_model)
-        self.mlp = MLP(d_model, d_ff)
+        self.mlp = MLP(d_model, d_ff, dropout)
 
     def forward(self, x):
         x = x + self.mha(self.ln1(x))
@@ -91,11 +98,12 @@ class TransformerBlock(nn.Module):
 
 
 class TransformerModel(nn.Module):
-    def __init__(self, d_model, d_k, d_v, n_heads, d_ff, seq_len, n_layers, vocab_size):
+    def __init__(self, d_model, d_k, d_v, n_heads, d_ff, seq_len, n_layers, vocab_size, dropout):
         super().__init__()
         self.wte = nn.Embedding(vocab_size, d_model, device=device)
         self.wpe = nn.Embedding(seq_len, d_model, device=device)
-        self.blocks = nn.ModuleList([TransformerBlock(d_model, d_k, d_v, n_heads, d_ff, seq_len) for _ in range(n_layers)])
+        self.emb_dropout = nn.Dropout(dropout)
+        self.blocks = nn.ModuleList([TransformerBlock(d_model, d_k, d_v, n_heads, d_ff, seq_len, dropout) for _ in range(n_layers)])
         self.lm_head = nn.Linear(d_model, vocab_size)
         self.apply(self._init_weights)
 
@@ -103,6 +111,7 @@ class TransformerModel(nn.Module):
         b, t = x.shape
         pos = torch.arange(0, t, dtype=torch.long, device=device)
         x = self.wte(x) + self.wpe(pos)
+        x = self.emb_dropout(x)
         for block in self.blocks:
             x = block(x)
         y = self.lm_head(x)  # 4, 8, 50000

@@ -76,7 +76,17 @@ def main():
         pin_memory=True if torch.cuda.is_available() else False
     )
 
-    model = TransformerModel(cfg.d_model, cfg.d_k, cfg.d_v, cfg.n_heads, cfg.d_ff, cfg.seq_len, cfg.n_layers, cfg.vocab_size)
+    model = TransformerModel(
+        cfg.d_model,
+        cfg.d_k,
+        cfg.d_v,
+        cfg.n_heads,
+        cfg.d_ff,
+        cfg.seq_len,
+        cfg.n_layers,
+        cfg.vocab_size,
+        cfg.dropout
+    )
     model.to(device)
     optim = torch.optim.AdamW(model.parameters(), lr=cfg.learning_rate)
 
