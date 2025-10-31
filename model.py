@@ -5,20 +5,18 @@ from dataclasses import dataclass
 import numpy as np
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-torch.manual_seed(0)
-torch.set_default_device(device)
 
 
 @dataclass
 class Config():
     seq_len = 256
     batch_size = 64
-    d_model = 1024
+    d_model = 768
     d_k = 128
     d_v = 128
-    n_heads = 8
-    n_layers = 24
-    d_ff = 4096
+    n_heads = 6
+    n_layers = 12
+    d_ff = 3072
     vocab_size = 50257
     learning_rate = 3e-4
     bias = False
@@ -103,7 +101,6 @@ class TransformerModel(nn.Module):
 
     def forward(self, x, targets):
         b, t = x.shape
-
         pos = torch.arange(0, t, dtype=torch.long, device=device)
         x = self.wte(x) + self.wpe(pos)
         for block in self.blocks:
