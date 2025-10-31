@@ -15,8 +15,8 @@ def preprocess_data():
             ret += elem + "\n\n"
         return ret
 
-    raw_train = join_records("train")[0:10000]
-    raw_val = join_records("validation")[0:10000]
+    raw_train = join_records("train")
+    raw_val = join_records("validation")
 
     # vocab size of 50257
     enc = tiktoken.get_encoding("gpt2")
@@ -51,20 +51,18 @@ def main():
     val_data = get_data(val_ids, cfg)
     model = TransformerModel(cfg.d_model, cfg.d_k, cfg.d_v, cfg.n_heads, cfg.d_ff, cfg.seq_len, cfg.n_layers, cfg.vocab_size)
     optim = torch.optim.AdamW(model.parameters(), lr=cfg.learning_rate)
-    n_steps = 10000
+    n_steps = 10
     from tqdm import tqdm
     model.train()
     for step in tqdm(range(n_steps)):
         l = 0
         for batch in range(len(train_data)):
             optim.zero_grad()
-            logits, loss = model(train_data[batch][0], train_data[batch][1])
+            logits, loss = model(train_data[0][batch], train_data[1][batch])
             l = loss
             loss.backward()
             optim.step()
-        if step % 500 == 0:
-            print(f"loss: {l}")
-    # eval
+        print(f"loss: {l}")
 
     model.eval()
     l = 0

@@ -11,14 +11,14 @@ torch.set_default_device(device)
 
 @dataclass
 class Config():
-    seq_len = 8
-    batch_size = 32
-    d_model = 512
-    d_k = 64
-    d_v = 64
+    seq_len = 256
+    batch_size = 64
+    d_model = 1024
+    d_k = 128
+    d_v = 128
     n_heads = 8
-    n_layers = 6
-    d_ff = 2048
+    n_layers = 24
+    d_ff = 4096
     vocab_size = 50257
     learning_rate = 3e-4
     bias = False
@@ -44,8 +44,8 @@ class MultiHeadAttention(nn.Module):
         b, t, d_model = x.shape
         Q, K, V = self.w_q(x), self.w_k(x), self.w_v(x)  # (b, t, n_heads*d_k), (b, t, n_heads*d_k), (b, t, n_heads*d_v)
         Q = Q.view(b, t, self.n_heads, self.d_k).transpose(-2, -3)  # (b, n_heads, t, d_k)
-        K = Q.view(b, t, self.n_heads, self.d_k).transpose(-2, -3)  # (b, n_heads, t, d_k)
-        V = Q.view(b, t, self.n_heads, self.d_v).transpose(-2, -3)  # (b, n_heads, t, d_v)
+        K = K.view(b, t, self.n_heads, self.d_k).transpose(-2, -3)  # (b, n_heads, t, d_k)
+        V = V.view(b, t, self.n_heads, self.d_v).transpose(-2, -3)  # (b, n_heads, t, d_v)
         masked_attention = (Q @ K.transpose(-2, -1)).masked_fill_(self.mask, -float('inf'))  # (b, n_heads, t, t)
         intermediate = F.softmax(masked_attention / self.d_k**0.5, dim=-1)
         scores = intermediate @ V  # (b, n_heads, t, d_v)
