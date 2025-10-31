@@ -74,3 +74,7 @@ def main():
             l += loss
 
     print(f"val loss: {l/len(val_data)}")
+
+
+if __name__ == "__main__":
+    main()
