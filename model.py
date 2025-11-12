@@ -100,6 +100,7 @@ class TransformerBlock(nn.Module):
 class TransformerModel(nn.Module):
     def __init__(self, d_model, d_k, d_v, n_heads, d_ff, seq_len, n_layers, vocab_size, dropout):
         super().__init__()
+        self.seq_len = seq_len
         self.wte = nn.Embedding(vocab_size, d_model, device=device)
         self.wpe = nn.Embedding(seq_len, d_model, device=device)
         self.emb_dropout = nn.Dropout(dropout)
@@ -107,7 +108,7 @@ class TransformerModel(nn.Module):
         self.lm_head = nn.Linear(d_model, vocab_size)
         self.apply(self._init_weights)
 
-    def forward(self, x, targets):
+    def forward(self, x, targets=None):
         b, t = x.shape
         pos = torch.arange(0, t, dtype=torch.long, device=device)
         x = self.wte(x) + self.wpe(pos)
@@ -115,7 +116,10 @@ class TransformerModel(nn.Module):
         for block in self.blocks:
             x = block(x)
         y = self.lm_head(x)  # 4, 8, 50000
-        loss = F.cross_entropy(y.transpose(-2, -1), targets)
+        if targets is not None:
+            loss = F.cross_entropy(y.transpose(-2, -1), targets)
+        else:
+            loss = None
         return y, loss
 
     def _init_weights(self, module):
@@ -125,3 +129,27 @@ class TransformerModel(nn.Module):
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+    
+    def generate(self, prefix, tokens_to_generate=1, temperature=1.0, top_k=-1, top_p=1):
+        generated = prefix.copy()
+        for i in range(tokens_to_generate):
+            x = torch.tensor(generated[-self.seq_len:], dtype=torch.long, device=device).unsqueeze(0)
+            logits, _ = self.forward(x) # 1, 1, 50000
+            logits = logits[:, -1, :] / temperature
+            if top_k > 0:
+                values, indices = torch.topk(logits, top_k, dim=-1)
+                logits = torch.where(logits >= values[:, -1], logits, -torch.inf)
+            probs = torch.softmax(logits, dim=-1)
+            
+            if top_p < 1:
+                sorted_probs, sorted_indices = torch.sort(probs, dim=-1, descending=True) 
+                cumsum = torch.cumsum(sorted_probs, dim=-1)
+                remove_indices = cumsum > top_p # [F, F, F, T, T]; a = [1, 3, 5]; a[[F, F, F, T, T]]
+                probs[0][sorted_indices[remove_indices]] = -torch.inf
+                probs = torch.softmax(probs, dim=-1) # torch.Size([1, 50257])
+            next_token = torch.multinomial(probs, num_samples=1).item()
+            generated.append(next_token)
+        return generated[len(prefix):]
+
+
+
