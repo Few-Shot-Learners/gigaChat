@@ -129,7 +129,7 @@ class TransformerModel(nn.Module):
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-    
+
     def generate(self, prefix, tokens_to_generate=1, temperature=1.0, top_k=-1, top_p=1):
         generated = prefix.copy()
         for i in range(tokens_to_generate):
