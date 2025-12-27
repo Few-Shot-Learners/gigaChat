@@ -94,6 +94,10 @@ def main():
     from tqdm import tqdm
 
     # Training loop
+    k_cache = torch.empty(cfg.n_layers, cfg.n_heads, cfg.seq_len, cfg.d_k, device=device)
+    v_cache = torch.empty(cfg.n_layers, cfg.n_heads, cfg.seq_len, cfg.d_v, device=device)
+    kv_cache = (k_cache, v_cache)
+
     for epoch in range(n_epochs):
         model.train()
         total_loss = 0
@@ -103,7 +107,7 @@ def main():
             x_batch, y_batch = x_batch.to(device), y_batch.to(device)
 
             optim.zero_grad()
-            logits, loss = model(x_batch, y_batch)
+            logits, loss = model(x_batch, y_batch, kv_cache=None)
             loss.backward()
             optim.step()
 

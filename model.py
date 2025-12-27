@@ -40,14 +40,19 @@ class MultiHeadAttention(nn.Module):
         self.attention_dropout = nn.Dropout(dropout)
         self.output_dropout = nn.Dropout(dropout)
 
-    def forward(self, x):
+    def forward(self, x, kv_cache=None):
         # x is (b, t, d_model)
         b, t, d_model = x.shape
         Q, K, V = self.w_q(x), self.w_k(x), self.w_v(x)  # (b, t, n_heads*d_k), (b, t, n_heads*d_k), (b, t, n_heads*d_v)
+        
+
         Q = Q.view(b, t, self.n_heads, self.d_k).transpose(-2, -3)  # (b, n_heads, t, d_k)
         K = K.view(b, t, self.n_heads, self.d_k).transpose(-2, -3)  # (b, n_heads, t, d_k)
         V = V.view(b, t, self.n_heads, self.d_v).transpose(-2, -3)  # (b, n_heads, t, d_v)
-        masked_attention = (Q @ K.transpose(-2, -1)).masked_fill_(self.mask[:t, :t], -float('inf'))  # (b, n_heads, t, t)
+        # CONCAT FROM CACHE
+        if kv_cache is not None:
+            K = torch.cat([kv_cache[0], K]) # FIX THIS
+        masked_attention = (Q @ K.transpose(-2, -1)).masked_fill_(self.mask[:t, :t], -float('inf'))  # (b, n_heads, t, t + cache_len)
         # the reason to do mask[:t, :t] instead of just self.mask is in the case that the input sequence is shorter than the sequence length; we don't want to mask asymmetrically
         intermediate = F.softmax(masked_attention / self.d_k**0.5, dim=-1)
         intermediate = self.attention_dropout(intermediate)
@@ -91,8 +96,8 @@ class TransformerBlock(nn.Module):
         self.ln2 = LayerNorm(d_model)
         self.mlp = MLP(d_model, d_ff, dropout)
 
-    def forward(self, x):
-        x = x + self.mha(self.ln1(x))
+    def forward(self, x, kv_cache=None):
+        x = x + self.mha(self.ln1(x), kv_cache)
         x = x + self.mlp(self.ln2(x))
         return x
 
@@ -108,13 +113,13 @@ class TransformerModel(nn.Module):
         self.lm_head = nn.Linear(d_model, vocab_size)
         self.apply(self._init_weights)
 
-    def forward(self, x, targets=None):
+    def forward(self, x, targets=None, kv_cache=None):
         b, t = x.shape
         pos = torch.arange(0, t, dtype=torch.long, device=device)
         x = self.wte(x) + self.wpe(pos)
         x = self.emb_dropout(x)
         for block in self.blocks:
-            x = block(x)
+            x = block(x, kv_cache)
         y = self.lm_head(x)  # 4, 8, 50000
         if targets is not None:
             loss = F.cross_entropy(y.transpose(-2, -1), targets)
@@ -130,7 +135,7 @@ class TransformerModel(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def generate(self, prefix, tokens_to_generate=1, temperature=1.0, top_k=-1, top_p=1):
+    def generate(self, prefix, tokens_to_generate=1, temperature=1.0, top_k=-1, top_p=1, kv_cache=None):
         generated = prefix.copy()
         for i in range(tokens_to_generate):
             x = torch.tensor(generated[-self.seq_len:], dtype=torch.long, device=device).unsqueeze(0)
