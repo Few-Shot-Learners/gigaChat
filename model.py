@@ -24,7 +24,7 @@ class Config():
 
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, n_heads, d_model, d_k, d_v, seq_len, dropout):
+    def __init__(self, n_heads, d_model, d_k, d_v, seq_len, dropout, layer_idx):
         super().__init__()
         # note that pretty much always d_k = d_v = d_model/n_heads (and so d_model should always be divisible by n_heads)
         self.n_heads = n_heads
@@ -39,22 +39,23 @@ class MultiHeadAttention(nn.Module):
         self.register_buffer('mask', torch.triu(torch.ones(seq_len, seq_len, dtype=torch.bool), diagonal=1), persistent=False)
         self.attention_dropout = nn.Dropout(dropout)
         self.output_dropout = nn.Dropout(dropout)
+        self.layer_idx = layer_idx
 
     def forward(self, x, kv_cache=None):
         # x is (b, t, d_model)
         b, t, d_model = x.shape
         Q, K, V = self.w_q(x), self.w_k(x), self.w_v(x)  # (b, t, n_heads*d_k), (b, t, n_heads*d_k), (b, t, n_heads*d_v)
-        
 
         Q = Q.view(b, t, self.n_heads, self.d_k).transpose(-2, -3)  # (b, n_heads, t, d_k)
         K = K.view(b, t, self.n_heads, self.d_k).transpose(-2, -3)  # (b, n_heads, t, d_k)
         V = V.view(b, t, self.n_heads, self.d_v).transpose(-2, -3)  # (b, n_heads, t, d_v)
         # CONCAT FROM CACHE
+        cache_len = 0
         if kv_cache is not None:
-            K = torch.cat([kv_cache[0], K]) # FIX THIS
-        masked_attention = (Q @ K.transpose(-2, -1)).masked_fill_(self.mask[:t, :t], -float('inf'))  # (b, n_heads, t, t + cache_len)
+            K, V, cache_len = kv_cache.add_kv(K, V, self.layer_idx)  # K is (b, n_heads, cache_len + t, dk)
+        masked_attn = (Q @ K.transpose(-2, -1)).masked_fill_(self.mask[cache_len:t+cache_len, :t+cache_len], -float('inf'))  # (b, n_heads, t, t + cache_len)
         # the reason to do mask[:t, :t] instead of just self.mask is in the case that the input sequence is shorter than the sequence length; we don't want to mask asymmetrically
-        intermediate = F.softmax(masked_attention / self.d_k**0.5, dim=-1)
+        intermediate = F.softmax(masked_attn / self.d_k**0.5, dim=-1)
         intermediate = self.attention_dropout(intermediate)
         scores = intermediate @ V  # (b, n_heads, t, d_v)
         y = self.w_o(scores.transpose(1, 2).contiguous().view(b, t, self.n_heads*self.d_v))  # (b, t, n_heads*d_v) @ (n_heads*d_v, d_model) = (b, t, d_model)
@@ -89,10 +90,10 @@ class LayerNorm(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    def __init__(self, d_model, d_k, d_v, n_heads, d_ff, seq_len, dropout):
+    def __init__(self, d_model, d_k, d_v, n_heads, d_ff, seq_len, dropout, layer_idx):
         super().__init__()
         self.ln1 = LayerNorm(d_model)
-        self.mha = MultiHeadAttention(n_heads, d_model, d_k, d_v, seq_len, dropout)
+        self.mha = MultiHeadAttention(n_heads, d_model, d_k, d_v, seq_len, dropout, layer_idx)
         self.ln2 = LayerNorm(d_model)
         self.mlp = MLP(d_model, d_ff, dropout)
 
@@ -109,7 +110,7 @@ class TransformerModel(nn.Module):
         self.wte = nn.Embedding(vocab_size, d_model, device=device)
         self.wpe = nn.Embedding(seq_len, d_model, device=device)
         self.emb_dropout = nn.Dropout(dropout)
-        self.blocks = nn.ModuleList([TransformerBlock(d_model, d_k, d_v, n_heads, d_ff, seq_len, dropout) for _ in range(n_layers)])
+        self.blocks = nn.ModuleList([TransformerBlock(d_model, d_k, d_v, n_heads, d_ff, seq_len, dropout, idx) for idx in range(n_layers)])
         self.lm_head = nn.Linear(d_model, vocab_size)
         self.apply(self._init_weights)
 
@@ -139,22 +140,19 @@ class TransformerModel(nn.Module):
         generated = prefix.copy()
         for i in range(tokens_to_generate):
             x = torch.tensor(generated[-self.seq_len:], dtype=torch.long, device=device).unsqueeze(0)
-            logits, _ = self.forward(x) # 1, 1, 50000
+            logits, _ = self.forward(x)  # 1, 1, 50000
             logits = logits[:, -1, :] / temperature
             if top_k > 0:
                 values, indices = torch.topk(logits, top_k, dim=-1)
                 logits = torch.where(logits >= values[:, -1], logits, -torch.inf)
             probs = torch.softmax(logits, dim=-1)
-            
+
             if top_p < 1:
-                sorted_probs, sorted_indices = torch.sort(probs, dim=-1, descending=True) 
+                sorted_probs, sorted_indices = torch.sort(probs, dim=-1, descending=True)
                 cumsum = torch.cumsum(sorted_probs, dim=-1)
-                remove_indices = cumsum > top_p # [F, F, F, T, T]; a = [1, 3, 5]; a[[F, F, F, T, T]]
+                remove_indices = cumsum > top_p  # [F, F, F, T, T]; a = [1, 3, 5]; a[[F, F, F, T, T]]
                 probs[0][sorted_indices[remove_indices]] = -torch.inf
-                probs = torch.softmax(probs, dim=-1) # torch.Size([1, 50257])
+                probs = torch.softmax(probs, dim=-1)  # torch.Size([1, 50257])
             next_token = torch.multinomial(probs, num_samples=1).item()
             generated.append(next_token)
         return generated[len(prefix):]
-
-
-
